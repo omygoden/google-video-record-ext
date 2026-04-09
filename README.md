@@ -11,7 +11,7 @@
 1. 打开 Chrome，访问 `chrome://extensions/`
 2. 打开右上角“开发者模式”
 3. 点击“加载已解压的扩展程序”
-4. 选择当前目录：`F:\gowork\google-ext\collect-video-ext`
+4. 选择插件所在目录
 
 ## 使用
 1. 点击扩展图标打开面板
