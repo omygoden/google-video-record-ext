@@ -1,4 +1,4 @@
-const statusEl = document.getElementById("status");
+﻿const statusEl = document.getElementById("status");
 
 const startVideoBtn = document.getElementById("startVideoBtn");
 const stopVideoBtn = document.getElementById("stopVideoBtn");
@@ -75,30 +75,65 @@ async function closeAudioContext(ctx) {
   try {
     await ctx.close();
   } catch (_) {
-    // Ignore close errors from inactive contexts.
+    // Ignore close errors.
   }
 }
 
-function captureCurrentTab(constraints) {
-  const captureOptions = { ...constraints };
-  if (Number.isInteger(targetTabId) && targetTabId > 0) {
-    captureOptions.targetTabId = targetTabId;
-  }
+function createPlaybackMonitor(stream) {
+  const audioTracks = stream.getAudioTracks();
+  if (!audioTracks.length) return null;
 
+  const monitorContext = new AudioContext();
+  const source = monitorContext.createMediaStreamSource(new MediaStream(audioTracks));
+  const gain = monitorContext.createGain();
+  gain.gain.value = 1.0;
+  source.connect(gain);
+  gain.connect(monitorContext.destination);
+  return monitorContext;
+}
+
+function requestTabStreamId(tabId) {
   return new Promise((resolve, reject) => {
-    chrome.tabCapture.capture(captureOptions, (stream) => {
+    chrome.runtime.sendMessage({ type: "GET_TAB_STREAM_ID", targetTabId: tabId }, (resp) => {
       const err = chrome.runtime.lastError;
       if (err) {
         reject(new Error(err.message));
         return;
       }
-      if (!stream) {
-        reject(new Error("无法捕获当前标签页，请确认标签页可见且正在播放内容。"));
+      if (!resp?.ok || !resp.streamId) {
+        reject(new Error(resp?.error || "无法获取标签页流 ID。"));
         return;
       }
-      resolve(stream);
+      resolve(resp.streamId);
     });
   });
+}
+
+async function getTabMediaStream(tabId, withVideo, withAudio) {
+  const streamId = await requestTabStreamId(tabId);
+  const constraints = {
+    audio: withAudio
+      ? {
+          mandatory: {
+            chromeMediaSource: "tab",
+            chromeMediaSourceId: streamId
+          }
+        }
+      : false,
+    video: withVideo
+      ? {
+          mandatory: {
+            chromeMediaSource: "tab",
+            chromeMediaSourceId: streamId,
+            maxWidth: 1920,
+            maxHeight: 1080,
+            maxFrameRate: 30
+          }
+        }
+      : false
+  };
+
+  return navigator.mediaDevices.getUserMedia(constraints);
 }
 
 function amplifyCapturedStream(inputStream, gainValue, keepVideoTrack) {
@@ -189,19 +224,11 @@ async function transcodeToWav(recordedBlob) {
 startVideoBtn.addEventListener("click", async () => {
   if (videoState?.recorder?.state === "recording") return;
 
+  let monitorContext = null;
   try {
     setStatus("正在捕获当前标签页视频...");
-    const baseStream = await captureCurrentTab({
-      video: true,
-      audio: Boolean(videoWithAudio.checked),
-      videoConstraints: {
-        mandatory: {
-          maxWidth: 1920,
-          maxHeight: 1080,
-          maxFrameRate: 30
-        }
-      }
-    });
+    const baseStream = await getTabMediaStream(targetTabId, true, Boolean(videoWithAudio.checked));
+    monitorContext = videoWithAudio.checked ? createPlaybackMonitor(baseStream) : null;
 
     const { stream, audioContext } = videoWithAudio.checked
       ? amplifyCapturedStream(baseStream, AUDIO_GAIN, true)
@@ -231,6 +258,7 @@ startVideoBtn.addEventListener("click", async () => {
       stopTracks(stream);
       if (stream !== baseStream) stopTracks(baseStream);
       await closeAudioContext(audioContext);
+      await closeAudioContext(monitorContext);
       stopTimer(videoState);
       videoState = null;
       startVideoBtn.disabled = false;
@@ -246,6 +274,7 @@ startVideoBtn.addEventListener("click", async () => {
     stopVideoBtn.disabled = false;
     setStatus("视频录制中...");
   } catch (err) {
+    await closeAudioContext(monitorContext);
     setStatus(`视频录制失败：${err?.message || "未知错误"}`, true);
   }
 });
@@ -260,13 +289,12 @@ stopVideoBtn.addEventListener("click", () => {
 startAudioBtn.addEventListener("click", async () => {
   if (audioState?.recorder?.state === "recording") return;
 
+  let monitorContext = null;
   try {
     const format = audioFormatEl.value;
     setStatus("正在捕获当前标签页声音...");
-    const baseStream = await captureCurrentTab({
-      audio: true,
-      video: false
-    });
+    const baseStream = await getTabMediaStream(targetTabId, false, true);
+    monitorContext = createPlaybackMonitor(baseStream);
     const { stream, audioContext } = amplifyCapturedStream(baseStream, AUDIO_GAIN, false);
 
     let mimeType = "";
@@ -315,6 +343,7 @@ startAudioBtn.addEventListener("click", async () => {
         stopTracks(stream);
         if (stream !== baseStream) stopTracks(baseStream);
         await closeAudioContext(audioContext);
+        await closeAudioContext(monitorContext);
         stopTimer(audioState);
         audioState = null;
         startAudioBtn.disabled = false;
@@ -328,17 +357,12 @@ startAudioBtn.addEventListener("click", async () => {
     startTimer(audioState, audioTimerEl);
     startAudioBtn.disabled = true;
     stopAudioBtn.disabled = false;
-setStatus(`音频录制中（${format.toUpperCase()}，增益 x${AUDIO_GAIN}）...`);
+    setStatus(`音频录制中（${format.toUpperCase()}，增益 x${AUDIO_GAIN}）...`);
   } catch (err) {
+    await closeAudioContext(monitorContext);
     setStatus(`音频录制失败：${err?.message || "未知错误"}`, true);
   }
 });
-
-if (!Number.isInteger(targetTabId) || targetTabId <= 0) {
-  startVideoBtn.disabled = true;
-  startAudioBtn.disabled = true;
-  setStatus("未绑定目标标签页，请回到要录制的页面后重新点击扩展图标。", true);
-}
 
 stopAudioBtn.addEventListener("click", () => {
   const recorder = audioState?.recorder;
@@ -346,3 +370,9 @@ stopAudioBtn.addEventListener("click", () => {
   recorder.stop();
   setStatus("正在处理音频文件...");
 });
+
+if (!Number.isInteger(targetTabId) || targetTabId <= 0) {
+  startVideoBtn.disabled = true;
+  startAudioBtn.disabled = true;
+  setStatus("未绑定目标标签页，请回到要录制的页面后重新点击扩展图标。", true);
+}

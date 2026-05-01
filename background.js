@@ -1,4 +1,4 @@
-const PANEL_URL = chrome.runtime.getURL("popup.html");
+﻿const PANEL_URL = chrome.runtime.getURL("popup.html");
 const PANEL_WIDTH = 380;
 const PANEL_HEIGHT = 620;
 
@@ -30,4 +30,32 @@ chrome.action.onClicked.addListener(async (tab) => {
     height: PANEL_HEIGHT,
     focused: true
   });
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "GET_TAB_STREAM_ID") return false;
+
+  const targetTabId = Number(message.targetTabId);
+  const consumerTabId = sender.tab?.id;
+  if (!Number.isInteger(targetTabId) || !Number.isInteger(consumerTabId)) {
+    sendResponse({ ok: false, error: "Invalid tab context." });
+    return false;
+  }
+
+  chrome.tabCapture.getMediaStreamId(
+    {
+      targetTabId,
+      consumerTabId
+    },
+    (streamId) => {
+      const err = chrome.runtime.lastError;
+      if (err || !streamId) {
+        sendResponse({ ok: false, error: err?.message || "Cannot get stream id." });
+        return;
+      }
+      sendResponse({ ok: true, streamId });
+    }
+  );
+
+  return true;
 });
