@@ -1,4 +1,4 @@
-﻿const statusEl = document.getElementById("status");
+const statusEl = document.getElementById("status");
 
 const startVideoBtn = document.getElementById("startVideoBtn");
 const stopVideoBtn = document.getElementById("stopVideoBtn");
@@ -9,6 +9,19 @@ const audioFormatEl = document.getElementById("audioFormat");
 const startAudioBtn = document.getElementById("startAudioBtn");
 const stopAudioBtn = document.getElementById("stopAudioBtn");
 const audioTimerEl = document.getElementById("audioTimer");
+
+const trimFileEl = document.getElementById("trimFile");
+const trimStartEl = document.getElementById("trimStart");
+const trimEndEl = document.getElementById("trimEnd");
+const trimAudioBtn = document.getElementById("trimAudioBtn");
+
+const audioPlayerContainer = document.getElementById("audioPlayerContainer");
+const audioPlayer = document.getElementById("audioPlayer");
+const waveformWrapper = document.getElementById("waveformWrapper");
+const waveformContainer = document.getElementById("waveformContainer");
+const selectionOverlay = document.getElementById("selectionOverlay");
+const rangeLabel = document.getElementById("rangeLabel");
+const playhead = document.getElementById("playhead");
 
 const AUDIO_GAIN = 2.0;
 const targetTabId = Number(new URLSearchParams(window.location.search).get("targetTabId"));
@@ -369,6 +382,237 @@ stopAudioBtn.addEventListener("click", () => {
   if (!recorder || recorder.state !== "recording") return;
   recorder.stop();
   setStatus("正在处理音频文件...");
+});
+
+let currentAudioDuration = 0;
+let audioUrl = null;
+let cachedAudioBuffer = null;
+
+async function drawWaveform(audioBuffer) {
+  const canvas = document.getElementById('waveformCanvas');
+  const ctx = canvas.getContext('2d');
+  
+  const dpr = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth || 340;
+  const height = canvas.clientHeight || 60;
+  
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+  ctx.scale(dpr, dpr);
+  
+  const data = audioBuffer.getChannelData(0);
+  
+  const barWidth = 2;
+  const barGap = 1.5;
+  const barTotal = barWidth + barGap;
+  const numBars = Math.floor(width / barTotal);
+  
+  const step = Math.floor(data.length / numBars);
+  const amp = height / 2;
+  
+  ctx.clearRect(0, 0, width, height);
+  
+  const gradient = ctx.createLinearGradient(0, 0, 0, height);
+  gradient.addColorStop(0, '#a78bfa');
+  gradient.addColorStop(0.5, '#7c3aed');
+  gradient.addColorStop(1, '#4f46e5');
+  ctx.fillStyle = gradient;
+  
+  for (let i = 0; i < numBars; i++) {
+    let min = 1.0;
+    let max = -1.0;
+    for (let j = 0; j < step; j++) {
+      const idx = (i * step) + j;
+      if (idx < data.length) {
+        const val = data[idx];
+        if (val < min) min = val;
+        if (val > max) max = val;
+      }
+    }
+    
+    let val = Math.max(Math.abs(min), Math.abs(max));
+    if (val < 0.05) val = 0.05;
+    
+    const barHeight = Math.min(val * amp * 1.8, height - 2);
+    const y = amp - barHeight / 2;
+    const x = i * barTotal;
+    
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(x, y, barWidth, barHeight, barWidth / 2);
+    } else {
+      ctx.rect(x, y, barWidth, barHeight);
+    }
+    ctx.fill();
+  }
+}
+
+trimFileEl.addEventListener("change", async () => {
+  const file = trimFileEl.files[0];
+  if (!file) {
+    audioPlayerContainer.style.display = "none";
+    waveformWrapper.style.display = "none";
+    trimAudioBtn.disabled = true;
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      audioUrl = null;
+    }
+    cachedAudioBuffer = null;
+    return;
+  }
+
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+  audioUrl = URL.createObjectURL(file);
+  audioPlayer.src = audioUrl;
+  audioPlayer.load();
+
+  try {
+    setStatus("正在解析音频波形...");
+    trimAudioBtn.disabled = true;
+    const arrayBuffer = await file.arrayBuffer();
+    const audioCtx = new AudioContext();
+    cachedAudioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    await audioCtx.close();
+    
+    currentAudioDuration = cachedAudioBuffer.duration;
+    drawWaveform(cachedAudioBuffer);
+    
+    updateSelectionDisplay(0, 1); // Select all initially
+    
+    audioPlayerContainer.style.display = "block";
+    waveformWrapper.style.display = "block";
+    trimAudioBtn.disabled = false;
+    setStatus("准备就绪");
+  } catch (err) {
+    setStatus(`音频解析失败：${err.message}`, true);
+  }
+});
+
+audioPlayer.addEventListener('timeupdate', () => {
+  if (!currentAudioDuration) return;
+  const percent = audioPlayer.currentTime / currentAudioDuration;
+  playhead.style.left = `${percent * 100}%`;
+});
+
+let isDragging = false;
+let dragType = null; // 'start', 'end', 'new'
+let dragStartPercent = 0;
+
+function updateSelectionDisplay(startPct, endPct) {
+  const left = Math.min(startPct, endPct);
+  const width = Math.abs(endPct - startPct);
+  selectionOverlay.style.left = `${left * 100}%`;
+  selectionOverlay.style.width = `${width * 100}%`;
+  
+  const startSec = left * currentAudioDuration;
+  const endSec = (left + width) * currentAudioDuration;
+  trimStartEl.value = startSec;
+  trimEndEl.value = endSec;
+  rangeLabel.textContent = `${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s`;
+}
+
+waveformContainer.addEventListener('mousedown', (e) => {
+  if (!currentAudioDuration) return;
+  const rect = waveformContainer.getBoundingClientRect();
+  const clickPercent = (e.clientX - rect.left) / rect.width;
+  
+  const currentStart = parseFloat(trimStartEl.value) / currentAudioDuration || 0;
+  const currentEnd = parseFloat(trimEndEl.value) / currentAudioDuration || 1;
+  
+  const threshold = 0.05; // 5% area for grabbing handles
+  
+  if (Math.abs(clickPercent - currentStart) < threshold) {
+    dragType = 'start';
+  } else if (Math.abs(clickPercent - currentEnd) < threshold) {
+    dragType = 'end';
+  } else {
+    dragType = 'new';
+    dragStartPercent = clickPercent;
+    updateSelectionDisplay(clickPercent, clickPercent);
+    audioPlayer.currentTime = clickPercent * currentAudioDuration;
+  }
+  isDragging = true;
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  const rect = waveformContainer.getBoundingClientRect();
+  let percent = (e.clientX - rect.left) / rect.width;
+  percent = Math.max(0, Math.min(1, percent));
+  
+  if (dragType === 'start') {
+    const end = parseFloat(trimEndEl.value) / currentAudioDuration;
+    if (percent > end) percent = end;
+    updateSelectionDisplay(percent, end);
+    audioPlayer.currentTime = percent * currentAudioDuration;
+  } else if (dragType === 'end') {
+    const start = parseFloat(trimStartEl.value) / currentAudioDuration;
+    if (percent < start) percent = start;
+    updateSelectionDisplay(start, percent);
+    audioPlayer.currentTime = percent * currentAudioDuration;
+  } else if (dragType === 'new') {
+    updateSelectionDisplay(dragStartPercent, percent);
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  isDragging = false;
+});
+
+trimAudioBtn.addEventListener("click", async () => {
+  const file = trimFileEl.files[0];
+  if (!file || !cachedAudioBuffer) {
+    setStatus("请先选择一个音频文件进行裁剪", true);
+    return;
+  }
+  
+  const startSec = parseFloat(trimStartEl.value) || 0;
+  const endSec = parseFloat(trimEndEl.value);
+
+  if (startSec < 0 || isNaN(endSec) || endSec <= startSec) {
+    setStatus("裁剪的开始和结束时间不合法", true);
+    return;
+  }
+
+  setStatus("正在处理音频文件...");
+  trimAudioBtn.disabled = true;
+
+  try {
+    const decoded = cachedAudioBuffer;
+    const sampleRate = decoded.sampleRate;
+    const channels = decoded.numberOfChannels;
+    
+    const startOffset = Math.floor(startSec * sampleRate);
+    const endOffset = Math.min(Math.floor(endSec * sampleRate), decoded.length);
+    const frameCount = endOffset - startOffset;
+    
+    if (frameCount <= 0) {
+       throw new Error("裁剪范围超出了音频实际长度");
+    }
+
+    const audioCtx = new OfflineAudioContext(channels, frameCount, sampleRate);
+    const trimmedBuffer = audioCtx.createBuffer(channels, frameCount, sampleRate);
+    
+    for (let c = 0; c < channels; c++) {
+      const channelData = decoded.getChannelData(c);
+      const trimmedData = trimmedBuffer.getChannelData(c);
+      for (let i = 0; i < frameCount; i++) {
+        trimmedData[i] = channelData[startOffset + i];
+      }
+    }
+    
+    setStatus("正在生成 WAV 文件...");
+    const wavBlob = audioBufferToWavBlob(trimmedBuffer);
+    const filename = `trimmed_${timestamp()}.wav`;
+    downloadBlob(wavBlob, filename);
+    
+    setStatus(`裁剪完成并保存：${filename}`);
+    
+  } catch (err) {
+    setStatus(`裁剪失败：${err.message}`, true);
+  } finally {
+    trimAudioBtn.disabled = false;
+  }
 });
 
 if (!Number.isInteger(targetTabId) || targetTabId <= 0) {

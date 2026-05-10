@@ -6,7 +6,7 @@
   <title>AV Recorder Pro</title>
   <link rel="stylesheet" href="popup.css">
 </head>
-<body>
+<body style="width: 450px; min-width: 450px; margin: 0; padding: 0;">
   <main class="container">
     <h1>AV Recorder Pro</h1>
     <p class="subtitle">录制当前标签页视频和声音（MP4 / MP3 / WAV）</p>
@@ -38,6 +38,38 @@
       <div class="actions">
         <button id="startAudioBtn">开始音频录制</button>
         <button id="stopAudioBtn" class="danger" disabled>停止并保存</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>音频裁剪 (WAV 导出)</h2>
+      <div class="inline">
+        <label for="trimFile" style="white-space: nowrap !important; flex-shrink: 0 !important; min-width: 75px;">选择音频：</label>
+        <input type="file" id="trimFile" accept="audio/*" style="width: 200px !important; flex: none !important;">
+      </div>
+      
+      <div id="audioPlayerContainer" style="display: none; margin-bottom: 10px;">
+        <audio id="audioPlayer" controls style="width: 100%; height: 32px; border-radius: 6px;"></audio>
+      </div>
+
+      <div id="waveformWrapper" style="display: none; margin-bottom: 15px;">
+        <div style="font-size: 12px; color: var(--muted); margin-bottom: 6px; display: flex; justify-content: space-between;">
+          <span>裁剪范围</span>
+          <span id="rangeLabel">0.0s - 0.0s</span>
+        </div>
+        <div id="waveformContainer" style="position: relative; width: 100%; height: 64px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; cursor: crosshair; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);">
+          <canvas id="waveformCanvas" width="340" height="64" style="width: 100%; height: 100%; position: absolute; left: 0; top: 0; z-index: 1;"></canvas>
+          <div id="selectionOverlay" style="position: absolute; height: 100%; top: 0; left: 0; width: 100%; background: rgba(34, 197, 94, 0.25); z-index: 2; border-left: 2px solid #22c55e; border-right: 2px solid #22c55e; pointer-events: none;"></div>
+          <div id="playhead" style="position: absolute; height: 100%; top: 0; left: 0; width: 1px; background: #ef4444; z-index: 3; pointer-events: none;"></div>
+        </div>
+        <div class="inline" style="display: none;">
+          <input type="number" id="trimStart" value="0">
+          <input type="number" id="trimEnd" value="0">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="trimAudioBtn" disabled>开始裁剪</button>
       </div>
     </section>
 
